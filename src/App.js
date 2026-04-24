@@ -459,7 +459,7 @@ export default function App() {
     ...(hasPerm("payments") ? [{ id: "payments", icon: "💳", label: role === "student" ? "My Payments" : "Payments" }] : []),
     ...(hasPerm("users") ? [{ id: "users", icon: "👥", label: "Users Admin" }] : []),
     ...(hasPerm("logs") ? [{ id: "logs", icon: "📜", label: "System Logs" }] : []),
-    ...(hasPerm("rolepermissions") || role === "developer" ? [{ id: "rolepermissions", icon: "🔐", label: "Role Permissions" }] : []),
+    // ...(hasPerm("rolepermissions") || role === "developer" ? [{ id: "rolepermissions", icon: "🔐", label: "Role Permissions" }] : []),
   ];
 
   useEffect(() => {
@@ -2395,59 +2395,138 @@ function PermitAssignmentModal({ show, student, onClose, token, onAssigned }) {
 }
 function MyPermits({ token }) {
   const [permits, setPermits] = useState([]);
+  const [eligibility, setEligibility] = useState(null);
+  const [semesters, setSemesters] = useState([]);
+  const [selectedSem, setSelectedSem] = useState(null);
   const [loading, setLoading] = useState(true);
+  const THRESHOLDS = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
 
   useEffect(() => {
-    api("/my-permits", {}, token)
-      .then(setPermits)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    Promise.all([
+      api("/my-permits", {}, token),
+      api("/semesters", {}, token)
+    ]).then(([p, s]) => {
+      setPermits(p);
+      setSemesters(s);
+      if (s.length > 0) setSelectedSem(s[s.length - 1].id);
+    }).catch(console.error).finally(() => setLoading(false));
   }, [token]);
 
-  if (loading) return <div>Loading permits...</div>;
+  useEffect(() => {
+    if (!selectedSem) return;
+    api(`/my-permit-eligibility?semester_id=${selectedSem}`, {}, token)
+      .then(setEligibility).catch(() => setEligibility(null));
+  }, [selectedSem, token]);
 
-  // Group by Semester
-  const groups = permits.reduce((acc, p) => {
-    const key = `${p.school_year} - ${p.term}`;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(p);
-    return acc;
-  }, {});
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Loading permits...</div>;
+
+  const sem = semesters.find(s => s.id === selectedSem);
+  const semesterPermits = permits.filter(p => sem ? (p.school_year === sem.school_year && p.term === sem.term) : false);
+  const permitMap = {};
+  for (const p of semesterPermits) permitMap[p.period_name] = p;
+
+  const pct = eligibility ? Math.round(eligibility.pct_paid) : 0;
+  const totalFees = eligibility ? parseFloat(eligibility.total_fees) : 0;
+  const totalPaid = eligibility ? parseFloat(eligibility.total_paid) : 0;
+  const balanceDue = Math.max(0, totalFees - totalPaid);
+  const pctColor = pct >= 100 ? "#22c55e" : pct >= 80 ? "#3b82f6" : pct >= 60 ? "#f59e0b" : pct >= 40 ? "#f97316" : "#ef4444";
+  const fmt = (n) => "\u20b1" + Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const periods = eligibility?.periods || [
+    { period_name: "First Prelim", sort_order: 1 },
+    { period_name: "Second Prelim", sort_order: 2 },
+    { period_name: "Midterm", sort_order: 3 },
+    { period_name: "Semi-Final", sort_order: 4 },
+    { period_name: "Final", sort_order: 5 }
+  ];
 
   return (
     <div>
-      <PageHeader title={<span>{"\u{1F3AB}"} My Permits</span>} sub="View your examination permits by semester" />
-      {Object.keys(groups).length === 0 ? (
-        <Card><div style={{ textAlign: "center", color: "#64748b", padding: 20 }}>No permits found.</div></Card>
-      ) : (
-        Object.keys(groups).sort().reverse().map(sem => (
-          <div key={sem} style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", marginBottom: 12, paddingLeft: 4, borderLeft: "4px solid #2563eb" }}>
-              {sem}
+      <PageHeader title={<span>{"🎫"} My Permits</span>} sub="Your examination permits and payment eligibility" />
+      {semesters.length > 1 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+          {semesters.map(s => (
+            <button key={s.id} onClick={() => setSelectedSem(s.id)} style={{
+              padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+              background: selectedSem === s.id ? "#2563eb" : "#1e293b",
+              color: selectedSem === s.id ? "#fff" : "#94a3b8"
+            }}>{s.school_year} {s.term}</button>
+          ))}
+        </div>
+      )}
+      {selectedSem && (
+        <Card style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 4 }}>Semester Payment Progress</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#f1f5f9" }}>
+                {fmt(totalPaid)} <span style={{ fontSize: 14, fontWeight: 500, color: "#64748b" }}>of {fmt(totalFees)}</span>
+              </div>
+              {totalFees > 0 && balanceDue > 0
+                ? <div style={{ fontSize: 13, color: "#f87171", marginTop: 4 }}>{"⚠️"} {fmt(balanceDue)} remaining balance</div>
+                : totalFees > 0
+                ? <div style={{ fontSize: 13, color: "#22c55e", marginTop: 4 }}>{"✅"} Fully paid — eligible for all permits!</div>
+                : <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>No ledger set for this semester yet.</div>
+              }
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
-              {groups[sem].map(p => (
-                <Card key={p.id} title={p.period_name} action={<Badge text={p.status} type={p.status === "active" ? "green" : (p.status === "expired" ? "red" : "yellow")} />}>
-                  <div style={{ fontSize: 12, color: "#475569" }}>
-                    <div style={{ marginBottom: 4 }}>
-                      <strong>Permit #:</strong>{" "}
-                      <code>{(p.permit_number !== null && p.permit_number !== undefined && String(p.permit_number).trim() !== "") ? p.permit_number : "Not assigned"}</code>
-                    </div>
-                    <div><strong>Issued:</strong> {p.issue_date ? new Date(p.issue_date).toLocaleDateString() : (p.created_at ? new Date(p.created_at).toLocaleDateString() : "—")}</div>
-                    <div><strong>Valid Until:</strong> {p.expiry_date ? new Date(p.expiry_date).toLocaleDateString() : "—"}</div>
-                  </div>
-                  <div style={{ marginTop: 12, borderTop: "1px dashed #e2e8f0", paddingTop: 8, fontSize: 10, color: "#94a3b8" }}>
-                    Show this permit during the {p.period_name} examination.
-                  </div>
-                </Card>
-              ))}
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 28, fontWeight: 900, color: pctColor }}>{pct}%</div>
+              <div style={{ fontSize: 12, color: "#64748b" }}>paid</div>
             </div>
           </div>
-        ))
+          {totalFees > 0 && (
+            <div style={{ marginTop: 16, background: "#1e293b", borderRadius: 8, height: 10, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: `linear-gradient(90deg, ${pctColor}88, ${pctColor})`, borderRadius: 8, transition: "width 0.6s ease" }} />
+            </div>
+          )}
+        </Card>
       )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
+        {periods.map(ep => {
+          const threshold = THRESHOLDS[ep.sort_order] || 100;
+          const issued = permitMap[ep.period_name];
+          const isEligible = pct >= threshold;
+          const amountNeeded = totalFees > 0 ? Math.max(0, (threshold / 100) * totalFees - totalPaid) : 0;
+          return (
+            <div key={ep.sort_order} style={{
+              background: issued ? "linear-gradient(135deg,#14532d22,#16a34a11)" : isEligible ? "linear-gradient(135deg,#1e3a5f,#1e40af22)" : "#0f172a",
+              border: `1px solid ${issued ? "#16a34a44" : isEligible ? "#3b82f644" : "#1e293b"}`,
+              borderRadius: 12, padding: "18px 20px"
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>
+                  {issued ? "✅" : isEligible ? "🟡" : "🔒"} {ep.period_name}
+                </div>
+                <div style={{ fontSize: 11, color: "#94a3b8", background: "#1e293b", padding: "2px 8px", borderRadius: 10 }}>{threshold}%</div>
+              </div>
+              {issued ? (
+                <div style={{ fontSize: 12, color: "#86efac" }}>
+                  <div><strong>Permit #:</strong> <code style={{ background: "#14532d", padding: "1px 6px", borderRadius: 4, color: "#86efac" }}>{issued.permit_number || "—"}</code></div>
+                  <div style={{ marginTop: 4 }}><strong>Issued:</strong> {issued.issue_date ? new Date(issued.issue_date).toLocaleDateString() : issued.created_at ? new Date(issued.created_at).toLocaleDateString() : "—"}</div>
+                  {issued.expiry_date && <div><strong>Valid Until:</strong> {new Date(issued.expiry_date).toLocaleDateString()}</div>}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: isEligible ? "#93c5fd" : "#f87171" }}>
+                  {isEligible
+                    ? "Eligible — waiting for SAPS to assign"
+                    : amountNeeded > 0
+                    ? `Pay ${fmt(amountNeeded)} more to qualify`
+                    : `Need to reach ${threshold}% payment`}
+                </div>
+              )}
+              <div style={{ marginTop: 12, background: "#1e293b", borderRadius: 4, height: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.min(100, totalFees > 0 ? (pct / threshold) * 100 : 0)}%`, background: issued ? "#22c55e" : isEligible ? "#3b82f6" : "#f59e0b", borderRadius: 4, transition: "width 0.4s ease" }} />
+              </div>
+              <div style={{ fontSize: 10, color: "#475569", marginTop: 4 }}>{issued ? "Complete" : `${pct}% paid / ${threshold}% needed`}</div>
+            </div>
+          );
+        })}
+      </div>
+      {!selectedSem && <Card><div style={{ textAlign: "center", color: "#64748b", padding: 20 }}>No semesters found.</div></Card>}
     </div>
   );
 }
+
 
 function PermitsSidebar({ token, onSelectSemester, selectedSemester }) {
   const [semesters, setSemesters] = useState([]);
@@ -2792,7 +2871,105 @@ function PermitsModule({ token, semesterId, role, username, full_name, subjects,
   );
 }
 
+function EligibilityTable({ eligibilityData, bulkAssigning, doBulkAssign, doGiveAllEligible }) {
+  const allPeriods = eligibilityData[0]?.eligible_periods || [];
+  const totalEligibleUnassigned = allPeriods.reduce((sum, ep) =>
+    sum + eligibilityData.filter(s => s.eligible_periods.find(p => p.period_id === ep.period_id && p.is_eligible && !p.already_has_permit)).length
+  , 0);
+
+  return (
+    <div>
+      {/* Master "Give All Eligible" button */}
+      <div style={{ marginBottom: 16, padding: "14px 18px", background: "linear-gradient(135deg,#14532d,#16a34a22)", border: "1px solid #16a34a44", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 700, color: "#86efac", fontSize: 14 }}>🎯 Give All Eligible Permits</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+            {totalEligibleUnassigned > 0
+              ? `${totalEligibleUnassigned} permit assignment(s) ready across all periods`
+              : "All eligible permits already assigned"}
+          </div>
+        </div>
+        <button
+          onClick={doGiveAllEligible}
+          disabled={!!bulkAssigning || totalEligibleUnassigned === 0}
+          style={{
+            padding: "10px 24px", borderRadius: 8, border: "none", fontWeight: 700, fontSize: 14,
+            cursor: totalEligibleUnassigned > 0 && !bulkAssigning ? "pointer" : "not-allowed",
+            background: bulkAssigning === "all" ? "#6b7280" : totalEligibleUnassigned > 0 ? "#16a34a" : "#1e293b",
+            color: "#fff", transition: "all 0.2s"
+          }}>
+          {bulkAssigning === "all" ? "⏳ Assigning..." : "🚀 Give All Eligible Permits"}
+        </button>
+      </div>
+
+      {/* Per-period buttons */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+        {allPeriods.map(ep => {
+          const eligibleCount = eligibilityData.filter(s => s.eligible_periods.find(p => p.period_id === ep.period_id && p.is_eligible && !p.already_has_permit)).length;
+          return (
+            <button key={ep.period_id}
+              onClick={() => doBulkAssign(ep.period_id, ep.period_name)}
+              disabled={!!bulkAssigning || eligibleCount === 0}
+              style={{
+                padding: "9px 18px", borderRadius: 8, border: "none", cursor: eligibleCount > 0 ? "pointer" : "not-allowed",
+                background: bulkAssigning === ep.period_id ? "#6b7280" : eligibleCount > 0 ? "#2563eb" : "#1e293b",
+                color: "#fff", fontSize: 13, fontWeight: 600, transition: "all 0.2s"
+              }}>
+              {bulkAssigning === ep.period_id ? "Assigning..." : `📋 ${ep.period_name} (${eligibleCount} eligible)`}
+            </button>
+          );
+        })}
+      </div>
+
+      <Card title={`Student Eligibility — ${eligibilityData.length} students`}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #1e293b" }}>
+                <th style={{ textAlign: "left", padding: "8px 10px", color: "#94a3b8", fontWeight: 600 }}>Student</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", color: "#94a3b8", fontWeight: 600 }}>Paid</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", color: "#94a3b8", fontWeight: 600 }}>Total</th>
+                <th style={{ textAlign: "center", padding: "8px 10px", color: "#94a3b8", fontWeight: 600 }}>%</th>
+                {allPeriods.map(ep => (
+                  <th key={ep.period_id} style={{ textAlign: "center", padding: "8px 6px", color: "#94a3b8", fontWeight: 600, fontSize: 11 }}>{ep.period_name.replace(" Permit", "")}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {eligibilityData.map(s => {
+                const pctColor = s.pct_paid >= 100 ? "#22c55e" : s.pct_paid >= 80 ? "#3b82f6" : s.pct_paid >= 60 ? "#f59e0b" : s.pct_paid >= 40 ? "#f97316" : "#ef4444";
+                return (
+                  <tr key={s.student_id} style={{ borderBottom: "1px solid #0f172a" }}>
+                    <td style={{ padding: "8px 10px" }}>
+                      <div style={{ fontWeight: 600, color: "#f1f5f9" }}>{s.student_name}</div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>{s.student_id} · {s.course} {s.year}</div>
+                    </td>
+                    <td style={{ textAlign: "right", padding: "8px 10px", color: "#86efac" }}>&#8369;{Number(s.total_paid).toLocaleString("en-PH", { minimumFractionDigits: 0 })}</td>
+                    <td style={{ textAlign: "right", padding: "8px 10px", color: "#94a3b8" }}>&#8369;{Number(s.total_fees).toLocaleString("en-PH", { minimumFractionDigits: 0 })}</td>
+                    <td style={{ textAlign: "center", padding: "8px 10px" }}>
+                      <span style={{ color: pctColor, fontWeight: 700 }}>{s.pct_paid}%</span>
+                    </td>
+                    {s.eligible_periods.map(ep => (
+                      <td key={ep.period_id} style={{ textAlign: "center", padding: "8px 6px" }}>
+                        {ep.already_has_permit ? "✅" : ep.is_eligible ? "🟡" : "🔒"}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 11, color: "#475569", marginTop: 10, paddingTop: 8, borderTop: "1px solid #1e293b" }}>
+          ✅ = Permit issued &nbsp;·&nbsp; 🟡 = Eligible (not yet assigned) &nbsp;·&nbsp; 🔒 = Not yet eligible
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function PermitsView({ token, semesterId, role, username, canWrite, canDelete }) {
+
   // All roles share the same state
   const [students, setStudents] = useState([]);
   const [searchStu, setSearchStu] = useState("");
@@ -2805,7 +2982,58 @@ function PermitsView({ token, semesterId, role, username, canWrite, canDelete })
   const [editPermit, setEditPermit] = useState(null);
   const [deletePermit, setDeletePermit] = useState(null);
   const [assignModal, setAssignModal] = useState(false);
-  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 2500); };
+  // Eligibility / bulk-assign tab
+  const [activeTab, setActiveTab] = useState("permits"); // "permits" | "eligibility"
+  const [eligibilityData, setEligibilityData] = useState([]);
+  const [eligibilitySem, setEligibilitySem] = useState("");
+  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [bulkAssigning, setBulkAssigning] = useState(null); // period_id being bulk-assigned
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
+
+  const loadEligibility = async (semId) => {
+    if (!semId) return;
+    setEligibilityLoading(true);
+    try {
+      const data = await api(`/permit-eligibility?semester_id=${semId}`, {}, token);
+      setEligibilityData(data);
+    } catch (e) { flash("Error loading eligibility: " + e.message); }
+    finally { setEligibilityLoading(false); }
+  };
+
+  const doBulkAssign = async (periodId, periodName) => {
+    if (!eligibilitySem) return;
+    if (!window.confirm(`Auto-assign "${periodName}" permits to all eligible students?`)) return;
+    setBulkAssigning(periodId);
+    try {
+      const res = await api("/permits/bulk-assign", { method: "POST", body: { semester_id: Number(eligibilitySem), period_id: periodId } }, token);
+      flash(`✅ ${res.message}`);
+      await loadEligibility(eligibilitySem);
+    } catch (e) { flash("Error: " + e.message); }
+    finally { setBulkAssigning(null); }
+  };
+
+  const doGiveAllEligible = async () => {
+    if (!eligibilitySem || eligibilityData.length === 0) return;
+    const allPeriods = eligibilityData[0]?.eligible_periods || [];
+    const toAssign = allPeriods.filter(ep =>
+      eligibilityData.some(s => s.eligible_periods.find(p => p.period_id === ep.period_id && p.is_eligible && !p.already_has_permit))
+    );
+    if (toAssign.length === 0) { flash("ℹ️ All eligible permits are already assigned."); return; }
+    const names = toAssign.map(p => p.period_name).join(", ");
+    if (!window.confirm(`This will give permits for: ${names}\n\nContinue?`)) return;
+    setBulkAssigning("all");
+    let totalAssigned = 0;
+    for (const ep of toAssign) {
+      try {
+        const res = await api("/permits/bulk-assign", { method: "POST", body: { semester_id: Number(eligibilitySem), period_id: ep.period_id } }, token);
+        totalAssigned += res.assigned || 0;
+      } catch { }
+    }
+    setBulkAssigning(null);
+    flash(`✅ Done! Assigned ${totalAssigned} permit(s) across ${toAssign.length} period(s).`);
+    await loadEligibility(eligibilitySem);
+  };
+
 
   // Effects - all roles (including teacher) load students, semesters, and permits
   useEffect(() => {
@@ -2872,10 +3100,60 @@ function PermitsView({ token, semesterId, role, username, canWrite, canDelete })
   // Render
   return (
     <div>
-      <PageHeader title={<span>{"\u{1F3AB}"} Student Permits</span>} sub={role === "teacher" ? "View student permits by semester (read-only)" : "Search, view, and manage permits"} />
+      <PageHeader title={<span>{"🎫"} Student Permits</span>} sub={role === "teacher" ? "View student permits by semester (read-only)" : "Search, view, and manage permits"} />
       <>
         {msg && <div style={{ background: "linear-gradient(135deg, #ecfdf5, #d1fae5)", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 16px", marginBottom: 14, color: "#065f46", fontWeight: 600, fontSize: 13 }}>{msg}</div>}
-        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 18 }}>
+
+        {/* Tab Bar — only shown to write-capable roles */}
+        {canWrite && (
+          <div style={{ display: "flex", gap: 0, marginBottom: 20, background: "#0f172a", borderRadius: 10, padding: 4, width: "fit-content" }}>
+            {[{ id: "permits", label: "📋 Manage Permits" }, { id: "eligibility", label: "✅ Eligibility & Bulk Assign" }].map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+                padding: "8px 20px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "all 0.15s",
+                background: activeTab === t.id ? "#2563eb" : "transparent",
+                color: activeTab === t.id ? "#fff" : "#94a3b8"
+              }}>{t.label}</button>
+            ))}
+          </div>
+        )}
+
+        {/* ── ELIGIBILITY TAB ── */}
+        {activeTab === "eligibility" && canWrite && (
+          <div>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 18, flexWrap: "wrap" }}>
+              <select value={eligibilitySem} onChange={e => { setEligibilitySem(e.target.value); loadEligibility(e.target.value); }}
+                style={{ padding: "9px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: "#f1f5f9", fontSize: 13, minWidth: 220 }}>
+                <option value="">-- Select Semester --</option>
+                {semesters.map(s => <option key={s.id} value={s.id}>{s.school_year} · {s.term}</option>)}
+              </select>
+              {eligibilitySem && <button onClick={() => loadEligibility(eligibilitySem)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "#1e40af", color: "#fff", cursor: "pointer", fontSize: 13 }}>🔄 Refresh</button>}
+            </div>
+
+            {eligibilityLoading && <div style={{ color: "#94a3b8", padding: 20 }}>Loading eligibility data...</div>}
+
+            {!eligibilityLoading && eligibilityData.length > 0 && (
+              <EligibilityTable
+                eligibilityData={eligibilityData}
+                bulkAssigning={bulkAssigning}
+                doBulkAssign={doBulkAssign}
+                doGiveAllEligible={doGiveAllEligible}
+              />
+            )}
+
+
+            {!eligibilityLoading && eligibilityData.length === 0 && eligibilitySem && (
+              <Card><div style={{ textAlign: "center", color: "#64748b", padding: 20 }}>No student data found for this semester.</div></Card>
+            )}
+            {!eligibilitySem && (
+              <Card><div style={{ textAlign: "center", color: "#64748b", padding: 20 }}>Select a semester above to view eligibility.</div></Card>
+            )}
+          </div>
+        )}
+
+        {/* ── PERMITS TAB ── */}
+        {(activeTab === "permits" || !canWrite) && (
+          <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 18 }}>
+
           <Card title="Select Student">
             <input placeholder="🔍 Search..." value={searchStu} onChange={e => setSearchStu(e.target.value)}
               style={{ width: "100%", padding: "8px 11px", border: "1px solid var(--border-color)", borderRadius: 8, fontSize: 12, outline: "none", marginBottom: 10, background: "#0f172a", color: "white" }} />
@@ -2947,8 +3225,10 @@ function PermitsView({ token, semesterId, role, username, canWrite, canDelete })
             )}
           </div>
         </div>
+        )}
 
         {/* Assign permit */}
+
         <PermitAssignmentModal
           show={assignModal && !!selectedStudent}
           student={students.find(s => s.id === selectedStudent) || { id: selectedStudent, name: selectedStudent }}
@@ -3028,14 +3308,16 @@ function Payments({ token, role, studentIdFromAuth, canWrite, canDelete }) {
 
   const loadBalance = useCallback(async () => {
     try {
-      const r = await api(`/students/${encodeURIComponent(studentId)}/tuition-balance`, {}, token);
+      // Only use filterSemId for the balance display — recordSemId is only for recording new payments
+      const semQuery = filterSemId ? `?semester_id=${encodeURIComponent(filterSemId)}` : '';
+      const r = await api(`/students/${encodeURIComponent(studentId)}/tuition-balance${semQuery}`, {}, token);
       setBalance(r.tuition_balance);
       const qs = [];
       if (fromDate) qs.push(`from=${encodeURIComponent(fromDate)}`);
       if (toDate) qs.push(`to=${encodeURIComponent(toDate)}`);
       if (filterMethod) qs.push(`method=${encodeURIComponent(filterMethod)}`);
       if (filterSemId) qs.push(`semester_id=${encodeURIComponent(filterSemId)}`);
-      const p = await api(`/payments/${encodeURIComponent(studentId)}${qs.length ? "?" + qs.join("&") : ""}`, {}, token);
+      const p = await api(`/payments/${encodeURIComponent(studentId)}${qs.length ? '?' + qs.join('&') : ''}`, {}, token);
       setPayments(p);
     } catch (e) {
       setMsg(e.message);
@@ -3100,9 +3382,9 @@ function Payments({ token, role, studentIdFromAuth, canWrite, canDelete }) {
     }
   };
 
-  const sendReceiptEmail = async (payment) => {
+  const sendReceipt = async (payment) => {
     try {
-      await api("/paymongo/send-receipt", {
+      const res = await api("/paymongo/send-receipt", {
         method: "POST",
         body: {
           student_id: studentId,
@@ -3110,10 +3392,33 @@ function Payments({ token, role, studentIdFromAuth, canWrite, canDelete }) {
           amount_given: payment.amount_given,
           change: payment.change,
           method: payment.method,
-          reference: payment.reference
+          reference: payment.reference,
+          payment_type: payment.payment_type,
+          mode: "email"
         }
       }, token);
-      setMsg("Receipt sent to student's email!");
+      setMsg(res?.message || "📧 Email receipt sent!");
+    } catch (e) {
+      setMsg("Error: " + e.message);
+    }
+  };
+
+  const sendSMSReceipt = async (payment) => {
+    try {
+      const res = await api("/paymongo/send-receipt", {
+        method: "POST",
+        body: {
+          student_id: studentId,
+          amount: payment.amount,
+          amount_given: payment.amount_given,
+          change: payment.change,
+          method: payment.method,
+          reference: payment.reference,
+          payment_type: payment.payment_type,
+          mode: "sms"
+        }
+      }, token);
+      setMsg(res?.message || "📱 SMS sent!");
     } catch (e) {
       setMsg("Error: " + e.message);
     }
@@ -3221,11 +3526,14 @@ function Payments({ token, role, studentIdFromAuth, canWrite, canDelete }) {
                     <Td><code style={{ background: '#1e293b', padding: '3px 8px', borderRadius: 4, fontWeight: 'bold' }}>{p.reference || "-"}</code></Td>
                     {canWrite && (
                       <Td>
-                        <Btn variant="outline" onClick={() => sendReceiptEmail(p)} style={{ fontSize: 11, padding: "3px 10px" }}>
-                          Send Receipt
+                        <Btn variant="outline" onClick={() => sendReceipt(p)} style={{ fontSize: 11, padding: "3px 10px" }}>
+                          📧 Email
                         </Btn>
-                        <Btn variant="outline" onClick={() => printReceipt(p)} style={{ fontSize: 11, padding: "3px 10px", marginLeft: 6 }}>
-                          Print Receipt
+                        <Btn variant="outline" onClick={() => sendSMSReceipt(p)} style={{ fontSize: 11, padding: "3px 10px", marginLeft: 4 }}>
+                          📱 SMS
+                        </Btn>
+                        <Btn variant="outline" onClick={() => printReceipt(p)} style={{ fontSize: 11, padding: "3px 10px", marginLeft: 4 }}>
+                          🖨️ Print
                         </Btn>
                       </Td>
                     )}
@@ -4124,7 +4432,7 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
   const [modal, setModal] = useState(null);
   const [ledgerStudent, setLedgerStudent] = useState(null);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: "", course: "BSCS", year: "1st Year", email: "", status: "Active", birth_year: "" });
+  const [form, setForm] = useState({ name: "", course: "BSCS", year: "1st Year", email: "", phone: "", status: "Active", birth_year: "" });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -4200,10 +4508,10 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
 
   const flash = m => { setMsg(m); setTimeout(() => setMsg(""), 2500); };
   const openAdd = () => {
-    setForm({ name: "", course: "BSCS", year: "1st Year", email: "", status: "Active", birth_year: "" });
+    setForm({ name: "", course: "BSCS", year: "1st Year", email: "", phone: "", status: "Active", birth_year: "" });
     setEditing(null); setModal("form");
   };
-  const openEdit = s => { setForm({ name: s.name, course: s.course, year: s.year, email: s.email, status: s.status, birth_year: s.birth_year || "" }); setEditing(s.id); setModal("form"); };
+  const openEdit = s => { setForm({ name: s.name, course: s.course, year: s.year, email: s.email, phone: s.phone || "", status: s.status, birth_year: s.birth_year || "" }); setEditing(s.id); setModal("form"); };
 
   const handleSave = async () => {
     if (!form.name.trim() || !form.email.trim() || (!editing && !form.birth_year.trim()))
@@ -4216,6 +4524,7 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
         course: form.course.trim(),
         year: form.year.trim(),
         email: form.email.trim(),
+        phone: form.phone ? form.phone.trim() : "",
         status: form.status.trim(),
         birth_year: form.birth_year.trim()
       };
@@ -4283,7 +4592,7 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
         <div className="table-container">
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr>{["Student ID", "Full Name", "Course", "Year", "Email", "Status", ...(role !== "student" ? ["Permit", "Balance"] : []), "Actions"]
+              <tr>{["Student ID", "Full Name", "Course", "Year", "Email", "Phone", "Status", ...(role !== "student" ? ["Permit", "Balance"] : []), "Actions"]
                 .map(h => <Th key={h}>{h}</Th>)}</tr>
             </thead>
             <tbody>
@@ -4302,6 +4611,7 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
                     <Td>{s.course}</Td>
                     <Td>{s.year}</Td>
                     <Td style={{ fontSize: 12, color: "#6b7280" }}>{s.email}</Td>
+                    <Td style={{ fontSize: 12, color: "#6b7280" }}>{s.phone || <span style={{ fontStyle: 'italic', opacity: 0.7 }}>None</span>}</Td>
                     <Td><Badge text={s.status} type={s.status === "Active" ? "green" : "red"} /></Td>
                     {role !== "student" && (
                       <>
@@ -4358,6 +4668,8 @@ function Students({ students, setStudents, subjects, token, role, canWrite, canD
         </div>
         <Input label="Email Address *" type="email" placeholder="student@edu.ph"
           value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+        <Input label="Phone Number" placeholder="e.g. 09123456789"
+          value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <Input label="Course" placeholder="e.g. BSCS, BSIT, BSECE..." value={form.course}
             onChange={e => setForm(f => ({ ...f, course: e.target.value }))} />
@@ -5559,7 +5871,7 @@ function UsersAdmin({ token }) {
                   <Td>
                     <div style={{ display: "flex", gap: 6 }}>
                       <Btn variant="outline" onClick={() => openEdit(x)} style={{ fontSize: 11, padding: "4px 10px" }}>Edit</Btn>
-                      <Btn variant="outline" onClick={() => setPermModal(x)} style={{ fontSize: 11, padding: "4px 10px", borderColor: "var(--neon-blue)" }}>🛡️ Perms</Btn>
+                      {/* <Btn variant="outline" onClick={() => setPermModal(x)} style={{ fontSize: 11, padding: "4px 10px", borderColor: "var(--neon-blue)" }}>🛡️ Perms</Btn> */}
                       <Btn variant="danger" onClick={() => setConfirmDel(x.id)} style={{ fontSize: 11, padding: "4px 10px" }}>Delete</Btn>
                     </div>
                   </Td>

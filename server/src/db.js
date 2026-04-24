@@ -1,4 +1,4 @@
-﻿import { config } from "dotenv";
+import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 const __filename = fileURLToPath(import.meta.url);
@@ -9,9 +9,16 @@ config({ path: resolve(__dirname, "../.env") }); // fallback: server/.env
 import pg from "pg";
 const { Pool } = pg;
 
-const connectionString = process.env.DATABASE_URL;
+let connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error("DATABASE_URL is not set in the environment!");
+}
+
+// Fix: Supabase connection string sets search_path=storage by default,
+// which causes "permission denied for schema storage". 
+// Append options instead of using pool.on('connect') to avoid pg deprecation warnings.
+if (!connectionString.includes('search_path')) {
+  connectionString += (connectionString.includes('?') ? '&' : '?') + 'options=-c%20search_path=public';
 }
 
 export const pool = new Pool({
@@ -65,6 +72,7 @@ export async function initDB() {
       year TEXT NOT NULL,
       birth_year TEXT,
       email TEXT NOT NULL,
+      phone TEXT,
       status TEXT NOT NULL,
       permit_number INTEGER,
       tuition_balance DECIMAL DEFAULT 0,
@@ -84,6 +92,14 @@ export async function initDB() {
       time TEXT,
       semester_id INTEGER,
       deleted_at TIMESTAMP WITH TIME ZONE
+    );
+
+    CREATE TABLE IF NOT EXISTS semesters (
+      id SERIAL PRIMARY KEY,
+      school_year TEXT NOT NULL,
+      term TEXT NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (school_year, term)
     );
 
     CREATE TABLE IF NOT EXISTS grades (
@@ -139,14 +155,6 @@ export async function initDB() {
     CREATE TABLE IF NOT EXISTS student_id_sequence (
       year TEXT PRIMARY KEY,
       last INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS semesters (
-      id SERIAL PRIMARY KEY,
-      school_year TEXT NOT NULL,
-      term TEXT NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (school_year, term)
     );
 
     CREATE TABLE IF NOT EXISTS permit_periods (
@@ -358,6 +366,12 @@ export async function initDB() {
       } catch (pkErr) {
         console.warn("[DB] Note: Could not safely reassign grades PK, skipping. ", pkErr.message);
       }
+    }
+    // Ensure phone column exists (for SMS feature)
+    const checkPhone = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='students' AND column_name='phone'");
+    if (checkPhone.rows.length === 0) {
+      console.log("[DB] Adding phone column to students table...");
+      await pool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS phone TEXT");
     }
     
   } catch (e) {

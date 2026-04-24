@@ -540,6 +540,9 @@ app.delete(
       return res.status(403).json({ error: "Cannot delete owner" });
     await tx(async () => {
       if (hard) {
+        // Nullify audit_log references first to avoid FK constraint violation.
+        // This preserves audit history while allowing the user to be deleted.
+        await run("UPDATE audit_log SET user_id=NULL WHERE user_id=?", [prev.id]);
         await run("DELETE FROM users WHERE id=?", [prev.id]);
         await logAction({
           userId: req.user.id,
@@ -729,6 +732,7 @@ const studentSchema = z.object({
   year: z.string().min(1),
   email: z.string().email(),
   status: z.string().min(1),
+  phone: z.string().optional(),
   enrollment_year: z.string().optional(),
   program_years: z.number().int().min(1).max(10).optional(),
 });
@@ -759,14 +763,19 @@ app.get("/students", authRequired, requireRole("students"), async (req, res) => 
   
   const query = `
     SELECT s.*, 
-      ROUND((
-        COALESCE(l.tuition_fee::numeric,0) + COALESCE(l.misc_fee::numeric,0) + COALESCE(l.internship_fee::numeric,0) + 
-        COALESCE(l.computer_lab_fee::numeric,0) + COALESCE(l.chem_lab_fee::numeric,0) + COALESCE(l.aircon_fee::numeric,0) + 
-        COALESCE(l.shop_fee::numeric,0) + COALESCE(l.other_fees::numeric,0) + COALESCE(l.id_fee::numeric,0) + COALESCE(l.subscription_fee::numeric,0) - 
-        COALESCE(l.discount::numeric,0) + COALESCE(l.bank_account::numeric,0)
-      ) - COALESCE(p.total_paid, 0), 2) as computed_balance
+      ROUND(COALESCE(l.total_charges, 0) - COALESCE(p.total_paid, 0), 2) as computed_balance
     FROM students s
-    LEFT JOIN student_ledgers l ON l.student_id = s.id
+    LEFT JOIN (
+      SELECT student_id,
+        SUM(
+          COALESCE(tuition_fee::numeric,0) + COALESCE(misc_fee::numeric,0) + COALESCE(internship_fee::numeric,0) + 
+          COALESCE(computer_lab_fee::numeric,0) + COALESCE(chem_lab_fee::numeric,0) + COALESCE(aircon_fee::numeric,0) + 
+          COALESCE(shop_fee::numeric,0) + COALESCE(other_fees::numeric,0) + COALESCE(id_fee::numeric,0) + COALESCE(subscription_fee::numeric,0) - 
+          COALESCE(discount::numeric,0) + COALESCE(bank_account::numeric,0)
+        ) as total_charges
+      FROM student_ledgers
+      GROUP BY student_id
+    ) l ON l.student_id = s.id
     LEFT JOIN (SELECT student_id, SUM(amount) as total_paid FROM payments WHERE payment_type = 'Tuition' OR payment_type IS NULL GROUP BY student_id) p ON p.student_id = s.id
     WHERE s.deleted_at IS NULL
   `;
@@ -929,6 +938,7 @@ app.post(
       email: String(body.email || "").trim(),
       status: String(body.status || "Active").trim(),
       birth_year: String(body.birth_year || "").trim(),
+      phone: typeof body.phone === "string" ? body.phone.trim() : null,
     };
     if (
       !norm.name ||
@@ -982,7 +992,7 @@ app.post(
           continue;
         }
         await run(
-          "INSERT INTO students (id,name,course,year,email,status,birth_year) VALUES (?,?,?,?,?,?,?)",
+          "INSERT INTO students (id,name,course,year,email,status,birth_year,phone) VALUES (?,?,?,?,?,?,?,?)",
           [
             candidate,
             norm.name,
@@ -991,6 +1001,7 @@ app.post(
             norm.email,
             norm.status,
             norm.birth_year,
+            norm.phone || null,
           ],
         );
         assignedId = candidate;
@@ -1062,7 +1073,7 @@ app.put(
     );
     if (!s) return res.status(404).json({ error: "Not found" });
     await tx(async () => {
-      const fields = ["name", "course", "year", "email", "status"];
+      const fields = ["name", "course", "year", "email", "status", "phone"];
       const sets = fields
         .filter((f) => f in parsed.data)
         .map((f) => `${f}=?`)
@@ -1620,6 +1631,185 @@ app.delete(
   },
 );
 
+// ─── Permit Eligibility & Bulk Assignment ────────────────────────────────────
+
+// Thresholds per sort_order: 1→20%, 2→40%, 3→60%, 4→80%, 5→100%
+const PERMIT_THRESHOLDS = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
+
+// GET /permit-eligibility?semester_id=X
+// Returns all students with payment % and which periods they qualify for
+app.get("/permit-eligibility", authRequired, requireRole("permits", "read"), async (req, res) => {
+  const semesterId = Number(req.query.semester_id);
+  if (!semesterId) return res.status(400).json({ error: "semester_id required" });
+
+  try {
+    // Get all permit periods for this semester
+    const periods = await all(
+      "SELECT * FROM permit_periods WHERE semester_id=? ORDER BY sort_order ASC",
+      [semesterId]
+    );
+
+    // Get all active students
+    const students = await all(
+      "SELECT id, name, course, year FROM students WHERE deleted_at IS NULL ORDER BY name ASC"
+    );
+
+    // Get all existing permits for this semester
+    const existingPermits = await all(`
+      SELECT sp.student_id, sp.permit_period_id
+      FROM student_permits sp
+      JOIN permit_periods pp ON pp.id = sp.permit_period_id
+      WHERE pp.semester_id = ?
+    `, [semesterId]);
+    const permitSet = new Set(existingPermits.map(p => `${p.student_id}:${p.permit_period_id}`));
+
+    // Get ledger totals per student for this semester
+    const ledgers = await all(`
+      SELECT sl.student_id,
+        COALESCE(sl.tuition_fee,0) + COALESCE(sl.misc_fee,0) + COALESCE(sl.internship_fee,0) +
+        COALESCE(sl.computer_lab_fee,0) + COALESCE(sl.chem_lab_fee,0) + COALESCE(sl.aircon_fee,0) +
+        COALESCE(sl.shop_fee,0) + COALESCE(sl.other_fees,0) + COALESCE(sl.id_fee,0) +
+        COALESCE(sl.subscription_fee,0) - COALESCE(sl.discount,0) AS total_fees
+      FROM student_ledgers sl
+      WHERE sl.semester_id = ?
+    `, [semesterId]);
+    const ledgerMap = {};
+    for (const l of ledgers) ledgerMap[l.student_id] = parseFloat(l.total_fees) || 0;
+
+    const payments = await all(`
+      SELECT student_id, COALESCE(SUM(amount), 0) AS total_paid
+      FROM payments
+      WHERE semester_id = ? AND (payment_type = 'Tuition' OR payment_type IS NULL)
+      GROUP BY student_id
+    `, [semesterId]);
+    const payMap = {};
+    for (const p of payments) payMap[p.student_id] = parseFloat(p.total_paid) || 0;
+
+    // Only include students who have a ledger (total_fees > 0)
+    const result = students
+      .filter(s => (ledgerMap[s.id] || 0) > 0)
+      .map(s => {
+        const total_fees = ledgerMap[s.id] || 0;
+        const total_paid = payMap[s.id] || 0;
+        const pct_paid = total_fees > 0 ? Math.round((total_paid / total_fees) * 100) : 0;
+
+        const eligible_periods = periods.map(pp => {
+          const threshold = PERMIT_THRESHOLDS[pp.sort_order] || 100;
+          const is_eligible = pct_paid >= threshold;
+          const already_has_permit = permitSet.has(`${s.id}:${pp.id}`);
+          return {
+            period_id: pp.id,
+            period_name: pp.name,
+            sort_order: pp.sort_order,
+            threshold_pct: threshold,
+            is_eligible,
+            already_has_permit
+          };
+        });
+
+        return {
+          student_id: s.id,
+          student_name: s.name,
+          course: s.course,
+          year: s.year,
+          total_fees,
+          total_paid,
+          pct_paid,
+          eligible_periods
+        };
+      });
+
+    res.json(result);
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /permits/bulk-assign  body: { semester_id, period_id }
+// Assigns permits to all eligible students who don't already have one for the period
+app.post("/permits/bulk-assign", authRequired, requireRole("permits", "write"), async (req, res) => {
+  const { semester_id, period_id } = req.body || {};
+  if (!semester_id || !period_id) return res.status(400).json({ error: "semester_id and period_id required" });
+
+  try {
+    const period = await get("SELECT * FROM permit_periods WHERE id=? AND semester_id=?", [period_id, semester_id]);
+    if (!period) return res.status(404).json({ error: "Permit period not found for this semester" });
+
+    const threshold = PERMIT_THRESHOLDS[period.sort_order] || 100;
+
+    // Get ledger + payment data for all students in this semester
+    const ledgers = await all(`
+      SELECT sl.student_id,
+        COALESCE(sl.tuition_fee,0) + COALESCE(sl.misc_fee,0) + COALESCE(sl.internship_fee,0) +
+        COALESCE(sl.computer_lab_fee,0) + COALESCE(sl.chem_lab_fee,0) + COALESCE(sl.aircon_fee,0) +
+        COALESCE(sl.shop_fee,0) + COALESCE(sl.other_fees,0) + COALESCE(sl.id_fee,0) +
+        COALESCE(sl.subscription_fee,0) - COALESCE(sl.discount,0) AS total_fees
+      FROM student_ledgers sl
+      JOIN students s ON s.id = sl.student_id AND s.deleted_at IS NULL
+      WHERE sl.semester_id = ?
+    `, [semester_id]);
+
+    const payments = await all(`
+      SELECT student_id, COALESCE(SUM(amount), 0) AS total_paid
+      FROM payments
+      WHERE semester_id = ? AND (payment_type = 'Tuition' OR payment_type IS NULL)
+      GROUP BY student_id
+    `, [semester_id]);
+    const payMap = {};
+    for (const p of payments) payMap[p.student_id] = parseFloat(p.total_paid) || 0;
+
+    // Find eligible students who don't already have this permit
+    const alreadyHave = await all(
+      "SELECT student_id FROM student_permits WHERE permit_period_id=?", [period_id]
+    );
+    const alreadySet = new Set(alreadyHave.map(r => r.student_id));
+
+    const eligible = ledgers.filter(l => {
+      const total_fees = parseFloat(l.total_fees) || 0;
+      const total_paid = payMap[l.student_id] || 0;
+      const pct = total_fees > 0 ? (total_paid / total_fees) * 100 : 0;
+      return pct >= threshold && !alreadySet.has(l.student_id);
+    });
+
+    if (eligible.length === 0) {
+      return res.json({ ok: true, assigned: 0, message: "No new eligible students to assign." });
+    }
+
+    // Get next permit number sequence
+    let seq = await get("SELECT last FROM permit_number_sequence WHERE id=1");
+    let nextNum = Number(seq?.last || 0);
+
+    let assigned = 0;
+    for (const l of eligible) {
+      nextNum++;
+      const assignedNumber = String(nextNum);
+      try {
+        await run(
+          "INSERT INTO student_permits (student_id, permit_period_id, permit_number, status) VALUES (?,?,?,?) ON CONFLICT (student_id, permit_period_id) DO NOTHING",
+          [l.student_id, period_id, assignedNumber, "active"]
+        );
+        await run("UPDATE students SET permit_number=? WHERE id=?", [assignedNumber, l.student_id]);
+        assigned++;
+        await logAction({
+          userId: req.user.id,
+          action: "BULK_ASSIGN",
+          entity: "student_permit",
+          entityId: `${l.student_id}:${period_id}`,
+          details: { permit_number: assignedNumber, period_name: period.name, auto: true }
+        });
+      } catch (e) {
+        // Skip if already exists due to race condition
+      }
+    }
+
+    await run("UPDATE permit_number_sequence SET last=? WHERE id=1", [nextNum]);
+    res.json({ ok: true, assigned, message: `Assigned permits to ${assigned} student(s).` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Tuition balance management (SAPS/Register/Cashier)
 app.get(
   "/students/:id/tuition-balance",
@@ -1627,22 +1817,47 @@ app.get(
   requireRole("payments", "read"),
   async (req, res) => {
     const id = req.params.id;
-    const row = await get(`
-      SELECT s.tuition_balance,
-        ROUND((
-          COALESCE(l.tuition_fee::numeric,0) + COALESCE(l.misc_fee::numeric,0) + COALESCE(l.internship_fee::numeric,0) + 
-          COALESCE(l.computer_lab_fee::numeric,0) + COALESCE(l.chem_lab_fee::numeric,0) + COALESCE(l.aircon_fee::numeric,0) + 
-          COALESCE(l.shop_fee::numeric,0) + COALESCE(l.other_fees::numeric,0) + COALESCE(l.id_fee::numeric,0) + COALESCE(l.subscription_fee::numeric,0) - 
-          COALESCE(l.discount::numeric,0) + COALESCE(l.bank_account::numeric,0)
-        ) - COALESCE(p.total_paid, 0), 2) as computed_balance
-      FROM students s
-      LEFT JOIN student_ledgers l ON l.student_id = s.id
-      LEFT JOIN (SELECT student_id, SUM(amount) as total_paid FROM payments WHERE payment_type = 'Tuition' OR payment_type IS NULL GROUP BY student_id) p ON p.student_id = s.id
-      WHERE s.id=$1 AND s.deleted_at IS NULL
-    `, [id]);
-    if (!row) return res.status(404).json({ error: "Not found" });
-    const finalBalance = row.computed_balance !== null ? row.computed_balance : row.tuition_balance;
-    res.json({ id, tuition_balance: Number(finalBalance || 0) });
+    const semester_id = req.query.semester_id ? Number(req.query.semester_id) : null;
+
+    // Build semester-scoped charge total for this specific student
+    let chargesQuery, chargesParams;
+    if (semester_id) {
+      chargesQuery = `SELECT COALESCE(SUM(
+        COALESCE(tuition_fee::numeric,0) + COALESCE(misc_fee::numeric,0) + COALESCE(internship_fee::numeric,0) +
+        COALESCE(computer_lab_fee::numeric,0) + COALESCE(chem_lab_fee::numeric,0) + COALESCE(aircon_fee::numeric,0) +
+        COALESCE(shop_fee::numeric,0) + COALESCE(other_fees::numeric,0) + COALESCE(id_fee::numeric,0) +
+        COALESCE(subscription_fee::numeric,0) - COALESCE(discount::numeric,0) + COALESCE(bank_account::numeric,0)
+      ), 0) as total_charges FROM student_ledgers WHERE student_id=$1 AND semester_id=$2`;
+      chargesParams = [id, semester_id];
+    } else {
+      chargesQuery = `SELECT COALESCE(SUM(
+        COALESCE(tuition_fee::numeric,0) + COALESCE(misc_fee::numeric,0) + COALESCE(internship_fee::numeric,0) +
+        COALESCE(computer_lab_fee::numeric,0) + COALESCE(chem_lab_fee::numeric,0) + COALESCE(aircon_fee::numeric,0) +
+        COALESCE(shop_fee::numeric,0) + COALESCE(other_fees::numeric,0) + COALESCE(id_fee::numeric,0) +
+        COALESCE(subscription_fee::numeric,0) - COALESCE(discount::numeric,0) + COALESCE(bank_account::numeric,0)
+      ), 0) as total_charges FROM student_ledgers WHERE student_id=$1`;
+      chargesParams = [id];
+    }
+
+    // Build semester-scoped payment total for this specific student
+    let paymentsQuery, paymentsParams;
+    if (semester_id) {
+      paymentsQuery = `SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE student_id=$1 AND semester_id=$2 AND (payment_type='Tuition' OR payment_type IS NULL)`;
+      paymentsParams = [id, semester_id];
+    } else {
+      paymentsQuery = `SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE student_id=$1 AND (payment_type='Tuition' OR payment_type IS NULL)`;
+      paymentsParams = [id];
+    }
+
+    const [chargesRow, paymentsRow] = await Promise.all([
+      get(chargesQuery, chargesParams),
+      get(paymentsQuery, paymentsParams)
+    ]);
+
+    const totalCharges = Number(chargesRow?.total_charges || 0);
+    const totalPaid = Number(paymentsRow?.total_paid || 0);
+    const balance = Math.round((totalCharges - totalPaid) * 100) / 100;
+    res.json({ id, tuition_balance: balance });
   },
 );
 app.put(
@@ -2495,6 +2710,52 @@ app.get("/my-permits", authRequired, async (req, res) => {
   res.json(rows);
 });
 
+// GET /my-permit-eligibility?semester_id=X — student's own payment % and period eligibility
+app.get("/my-permit-eligibility", authRequired, async (req, res) => {
+  if (req.user.role !== "student") return res.status(403).json({ error: "Forbidden" });
+  const sid = req.user.student_id;
+  const semesterId = Number(req.query.semester_id);
+  if (!semesterId) return res.status(400).json({ error: "semester_id required" });
+
+  try {
+    const PERMIT_THRESHOLDS_STU = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
+
+    const ledger = await get(`
+      SELECT COALESCE(tuition_fee,0) + COALESCE(misc_fee,0) + COALESCE(internship_fee,0) +
+        COALESCE(computer_lab_fee,0) + COALESCE(chem_lab_fee,0) + COALESCE(aircon_fee,0) +
+        COALESCE(shop_fee,0) + COALESCE(other_fees,0) + COALESCE(id_fee,0) +
+        COALESCE(subscription_fee,0) - COALESCE(discount,0) AS total_fees
+      FROM student_ledgers WHERE student_id=? AND semester_id=?
+    `, [sid, semesterId]);
+
+    const paid = await get(`
+      SELECT COALESCE(SUM(amount),0) AS total_paid FROM payments
+      WHERE student_id=? AND semester_id=? AND (payment_type='Tuition' OR payment_type IS NULL)
+    `, [sid, semesterId]);
+
+    const periods = await all(
+      "SELECT * FROM permit_periods WHERE semester_id=? ORDER BY sort_order ASC",
+      [semesterId]
+    );
+
+    const total_fees = parseFloat(ledger?.total_fees || 0);
+    const total_paid = parseFloat(paid?.total_paid || 0);
+    const pct_paid = total_fees > 0 ? (total_paid / total_fees) * 100 : 0;
+
+    const periodData = periods.map(pp => ({
+      period_id: pp.id,
+      period_name: pp.name,
+      sort_order: pp.sort_order,
+      threshold_pct: PERMIT_THRESHOLDS_STU[pp.sort_order] || 100,
+      is_eligible: pct_paid >= (PERMIT_THRESHOLDS_STU[pp.sort_order] || 100)
+    }));
+
+    res.json({ total_fees, total_paid, pct_paid, periods: periodData });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Attendance CRUD with teacher isolation
 const attendanceCreateSchema = z.object({
   course_name: z.string().min(1),
@@ -2823,8 +3084,47 @@ app.put("/grade-change-requests/:id/done", authRequired, async (req, res) => {
 
 // ─── PayMongo Online Payment Integration ─────────────────────────────────────
 
+// Helper: send SMS via Movider
+async function sendSMS({ toNumber, message }) {
+  try {
+    const apiKey = process.env.MOVIDER_API_KEY;
+    const apiSecret = process.env.MOVIDER_API_SECRET;
+    if (!apiKey || !apiSecret) {
+      console.warn("[SMS] MOVIDER_API_KEY or MOVIDER_API_SECRET not configured. Skipping SMS.");
+      return;
+    }
+    if (!toNumber) {
+      console.warn("[SMS] No phone number provided. Skipping SMS.");
+      return;
+    }
+    // Clean the phone number to international format (no + sign)
+    let phone = String(toNumber).replace(/[^0-9]/g, "");
+    if (phone.startsWith("0")) phone = "63" + phone.slice(1);
+    else if (phone.startsWith("9")) phone = "63" + phone;
+
+    const params = new URLSearchParams();
+    params.append("api_key", apiKey);
+    params.append("api_secret", apiSecret);
+    params.append("to", phone);
+    params.append("from", "YBVC");
+    params.append("text", message);
+
+    console.log(`[SMS] Sending to ${phone}: ${message}`);
+
+    const response = await fetch("https://api.movider.co/v1/sms", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    const data = await response.json();
+    console.log(`[SMS] Movider response to ${phone}:`, JSON.stringify(data));
+  } catch (err) {
+    console.error("[SMS] Failed to send SMS:", err.message);
+  }
+}
+
 // Helper: send email receipt
-async function sendReceiptEmail({ toEmail, studentName, studentId, amount, paymentMethod, referenceId, transactionDate, amountGiven, change }) {
+async function sendReceiptEmail({ toEmail, studentName, studentId, amount, paymentMethod, referenceId, transactionDate, amountGiven, change, paymentType }) {
   try {
     const gmailUser = process.env.GMAIL_USER;
     const gmailPass = process.env.GMAIL_PASS;
@@ -2850,7 +3150,7 @@ async function sendReceiptEmail({ toEmail, studentName, studentId, amount, payme
           <table style="width: 100%; font-size: 14px; color: #333; border-collapse: collapse;">
             <tr><td style="padding: 8px 0; color: #888;">Student ID</td><td style="padding: 8px 0; font-weight: bold; text-align:right;">${studentId}</td></tr>
             <tr><td style="padding: 8px 0; color: #888;">Date</td><td style="padding: 8px 0; text-align:right;">${transactionDate}</td></tr>
-            <tr><td style="padding: 8px 0; color: #888;">Description</td><td style="padding: 8px 0; text-align:right;">TUITION (CURRENT)</td></tr>
+            <tr><td style="padding: 8px 0; color: #888;">Description</td><td style="padding: 8px 0; text-align:right;">${(paymentType || 'Tuition').toUpperCase()}</td></tr>
             <tr><td style="padding: 8px 0; color: #888;">Payment Method</td><td style="padding: 8px 0; text-align:right;">${paymentMethod}</td></tr>
             <tr><td style="padding: 8px 0; color: #888;">Reference No.</td><td style="padding: 8px 0; text-align:right; font-family: monospace;">${referenceId}</td></tr>
           </table>
@@ -2985,6 +3285,10 @@ app.post("/paymongo/webhook", express.raw({ type: "application/json" }), async (
 
       console.log(`[PAYMONGO WEBHOOK] Payment of ₱${amount} recorded for student ${student_id}.`);
 
+      // Fetch student phone from DB
+      const dbStudent = await get("SELECT phone FROM students WHERE id=?", [student_id]);
+      const studentPhone = dbStudent?.phone;
+
       // Send email receipt if student has email
       if (studentEmail) {
         await sendReceiptEmail({
@@ -2995,7 +3299,15 @@ app.post("/paymongo/webhook", express.raw({ type: "application/json" }), async (
           paymentMethod: paymentMethodStr,
           referenceId: paymentId,
           transactionDate,
+          paymentType: "Tuition"
         });
+      }
+
+      // Send SMS if student has phone
+      if (studentPhone) {
+        const amountFormatted = `₱${amount.toFixed(2)}`;
+        const smsMessage = `YBVC: Hi ${studentName}! Your payment of ${amountFormatted} for Tuition has been recorded on ${transactionDate}. Ref#: ${paymentId || 'N/A'}. Thank you!`;
+        await sendSMS({ toNumber: studentPhone, message: smsMessage });
       }
     }
     res.json({ ok: true });
@@ -3005,29 +3317,46 @@ app.post("/paymongo/webhook", express.raw({ type: "application/json" }), async (
   }
 });
 
-// POST /paymongo/send-receipt - Manually send a receipt email for a cash payment
+// POST /paymongo/send-receipt - Manually send a receipt email/SMS for a cash payment
 app.post("/paymongo/send-receipt", authRequired, async (req, res) => {
   try {
-    const { student_id, amount, method, reference, amount_given, change } = req.body;
+    const { student_id, amount, method, reference, amount_given, change, payment_type, mode } = req.body;
     if (!student_id || !amount) return res.status(400).json({ error: "student_id and amount required." });
 
-    const student = await get("SELECT id, name, email FROM students WHERE id=? AND deleted_at IS NULL", [student_id]);
+    const student = await get("SELECT id, name, email, phone FROM students WHERE id=? AND deleted_at IS NULL", [student_id]);
     if (!student) return res.status(404).json({ error: "Student not found." });
-    if (!student.email) return res.status(400).json({ error: "Student has no email address on file." });
 
     const transactionDate = new Date().toLocaleString("en-PH", { timeZone: "Asia/Manila" });
-    await sendReceiptEmail({
-      toEmail: student.email,
-      studentName: student.name,
-      studentId: student_id,
-      amount: parseFloat(amount),
-      paymentMethod: method || "Cash",
-      amountGiven: amount_given ? parseFloat(amount_given) : undefined,
-      change: change !== undefined ? parseFloat(change) : undefined,
-      referenceId: reference || "N/A",
-      transactionDate,
-    });
-    res.json({ ok: true, message: `Receipt sent to ${student.email}` });
+    const resolvedPaymentType = payment_type || "Tuition";
+    const amountFormatted = String.fromCharCode(8369) + parseFloat(amount).toFixed(2);
+
+    const doEmail = !mode || mode === "email";
+    const doSMS = !mode || mode === "sms";
+
+    if (doEmail && student.email) {
+      await sendReceiptEmail({
+        toEmail: student.email,
+        studentName: student.name,
+        studentId: student_id,
+        amount: parseFloat(amount),
+        paymentMethod: method || "Cash",
+        amountGiven: amount_given ? parseFloat(amount_given) : undefined,
+        change: change !== undefined ? parseFloat(change) : undefined,
+        referenceId: reference || "N/A",
+        transactionDate,
+        paymentType: resolvedPaymentType,
+      });
+    }
+
+    if (doSMS && student.phone) {
+      const smsMessage = `YBVC: Hi ${student.name}! Your payment of ${amountFormatted} for ${resolvedPaymentType} has been recorded on ${transactionDate}. Ref#: ${reference || "N/A"}. Thank you!`;
+      await sendSMS({ toNumber: student.phone, message: smsMessage });
+    }
+
+    const sent = [];
+    if (doEmail) sent.push(student.email ? `Email to ${student.email}` : "No email on file");
+    if (doSMS) sent.push(student.phone ? `SMS to ${student.phone}` : "No phone on file");
+    res.json({ ok: true, message: sent.join(" & ") });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

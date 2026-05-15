@@ -624,7 +624,7 @@ export default function App() {
   const [isSystemLoading, setIsSystemLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("Initializing System");
   const [showAuth, setShowAuth] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isMobile, setIsMobile] = useState(false); // Mobile layout disabled until ready
   const [stats, setStats] = useState(null);
   const [content, setContent] = useState({ next_examination: "No examination scheduled.", ybvc_staff: [] });
 

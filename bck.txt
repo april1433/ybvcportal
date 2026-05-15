@@ -1,0 +1,3 @@
+can we remove this insted of semester lets change the teacher permit view 
+
+lets make if i login the teacher then if i go the student permit its like the subject list insted of viewing all the student i can choose the subject that assing of that teacher example GE 8 if i click that i can view all student that enroll that subject 

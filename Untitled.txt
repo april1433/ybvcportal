@@ -1,0 +1,506 @@
+
+---
+
+# FULL MASTER PROMPT
+
+Create a modern, premium, enterprise-level full-stack web application for a professional lechon business ordering and management platform.
+
+The system must look extremely modern, luxurious, clean, responsive, smooth, and production-ready. The UI/UX should feel comparable to premium food delivery platforms and SaaS admin dashboards.
+
+The system must prioritize:
+
+* Professional appearance
+* Smooth animations
+* Mobile responsiveness
+* User friendliness
+* Fast performance
+* Modern business analytics
+* Advanced admin controls
+* Secure architecture
+* Scalable database design
+
+Use:
+
+* Next.js latest version
+* TypeScript
+* TailwindCSS
+* Framer Motion
+* ShadCN UI
+* Supabase for backend/database/auth/storage
+* Chart.js or Recharts for analytics
+* Zustand or Redux for state management
+* React Query / TanStack Query
+* Fully responsive mobile-first design
+* Dark/Light mode
+* Modern glassmorphism + premium dashboard design
+* Clean typography
+* Smooth page transitions
+* Loading skeletons
+* Toast notifications
+* Optimized SEO
+
+The design should feel like:
+
+* Foodpanda
+* GrabFood
+* Uber Eats
+* Modern SaaS dashboards
+* Apple-level clean UI
+* Stripe dashboard inspiration
+
+---
+
+# CUSTOMER FEATURES
+
+## Landing Page
+
+Create a stunning landing page with:
+
+* Hero section
+* Premium animations
+* Featured lechon products
+* Best sellers
+* Customer reviews carousel
+* Statistics section
+* Why choose us section
+* FAQ section
+* Contact section
+* Mobile optimized navbar
+* Sticky navigation
+* Floating order button
+
+Add smooth animations and modern transitions.
+
+---
+
+# AUTHENTICATION SYSTEM
+
+Use Supabase authentication.
+
+Include:
+
+* Register
+* Login
+* Google login
+* Facebook login
+* Forgot password
+* Email verification
+* Session persistence
+* Secure JWT handling
+* Role-based access control
+
+Roles:
+
+* Customer
+* Staff
+* Admin
+* Super Admin
+
+---
+
+# CUSTOMER DASHBOARD
+
+Customers can:
+
+* View profile
+* Edit account
+* View orders
+* Track order progress live
+* Reorder previous orders
+* Save delivery addresses
+* View payment history
+* Download receipts
+* Leave reviews
+* Chat support
+* Receive notifications
+
+---
+
+# PRODUCT MANAGEMENT
+
+Admin can:
+
+* Add/edit/delete products
+* Add multiple product images
+* Set pricing
+* Set package sizes
+* Set availability
+* Add promo pricing
+* Manage categories
+* Add product descriptions
+* Add tags
+* Add featured products
+* Manage inventory
+
+Each product should include:
+
+* HD image gallery
+* Reviews
+* Ratings
+* Preparation time
+* Delivery info
+* Dynamic pricing
+
+---
+
+# ADVANCED ORDERING SYSTEM
+
+Customers can:
+
+* Select lechon size
+* Customize order
+* Select delivery/pickup
+* Schedule date and time
+* Add notes
+* Apply vouchers
+* Use promo codes
+* Pay online
+* Upload payment proof
+* Track orders live
+
+Order statuses:
+
+* Pending
+* Confirmed
+* Preparing
+* Cooking
+* Ready
+* Out for Delivery
+* Delivered
+* Completed
+* Cancelled
+
+Add real-time updates using Supabase realtime.
+
+---
+
+# PAYMENT SYSTEM
+
+Integrate:
+
+* GCash
+* Maya
+* Bank transfer
+* Cash on delivery
+
+Admin can:
+
+* Verify payments
+* Approve/reject proof
+* View transactions
+* Export reports
+
+Generate:
+
+* Official receipts
+* Invoice PDFs
+* Transaction history
+
+---
+
+# ADMIN PANEL
+
+Create a premium admin dashboard with:
+
+* Sidebar navigation
+* Analytics overview
+* Charts
+* Revenue metrics
+* Activity logs
+* User management
+* Product management
+* Order management
+* Payment management
+* Review management
+* Notifications center
+
+Dashboard widgets:
+
+* Daily revenue
+* Weekly revenue
+* Monthly revenue
+* Total customers
+* Total orders
+* Pending payments
+* Best-selling products
+* Revenue charts
+* Growth analytics
+
+---
+
+# ADVANCED ANALYTICS SYSTEM
+
+Create enterprise-level analytics.
+
+Admin can filter by:
+
+* Today
+* Yesterday
+* Last 7 days
+* Last 30 days
+* Monthly
+* Yearly
+* Custom date range
+
+Example:
+
+* January 1 to March 1
+
+Show:
+
+* Revenue
+* Profit
+* Orders
+* Customer growth
+* Best-selling products
+* Sales heatmaps
+* Peak order times
+* Repeat customers
+* Conversion analytics
+
+Add beautiful interactive charts.
+
+---
+
+# REVIEW SYSTEM
+
+Customers can:
+
+* Leave star ratings
+* Write reviews
+* Upload images
+
+Admin can:
+
+* Reply to reviews
+* Hide spam reviews
+* Feature testimonials
+
+Display reviews beautifully on landing page.
+
+---
+
+# NOTIFICATION SYSTEM
+
+Include:
+
+* Real-time notifications
+* Email notifications
+* Order status updates
+* Payment confirmation
+* Admin alerts
+
+Add notification center UI.
+
+---
+
+# INVENTORY MANAGEMENT
+
+Admin can:
+
+* Track inventory
+* Track ingredients
+* Receive low stock alerts
+* View stock movement
+* Auto deduct stock after orders
+
+---
+
+# DELIVERY MANAGEMENT
+
+Create delivery tracking system.
+
+Include:
+
+* Delivery rider assignment
+* Delivery status
+* Delivery timeline
+* Estimated arrival
+* Google Maps integration
+* Delivery fee calculation
+
+---
+
+# REPORTING SYSTEM
+
+Generate:
+
+* Daily reports
+* Weekly reports
+* Monthly reports
+* Revenue reports
+* Product sales reports
+* Customer reports
+
+Export:
+
+* PDF
+* Excel
+* CSV
+
+---
+
+# SETTINGS PANEL
+
+Admin can configure:
+
+* Store information
+* Delivery fees
+* Business hours
+* Payment methods
+* Promo banners
+* Taxes
+* System preferences
+
+---
+
+# SECURITY
+
+Implement:
+
+* Secure authentication
+* Protected admin routes
+* Rate limiting
+* SQL injection protection
+* XSS protection
+* CSRF protection
+* Encrypted sensitive data
+* Audit logs
+
+---
+
+# DATABASE DESIGN (SUPABASE)
+
+Create complete optimized PostgreSQL schema for:
+
+* users
+* roles
+* products
+* categories
+* product_images
+* orders
+* order_items
+* payments
+* reviews
+* addresses
+* notifications
+* activity_logs
+* inventory
+* delivery_tracking
+* coupons
+* analytics
+* reports
+
+Use:
+
+* Foreign keys
+* Indexes
+* Optimized queries
+* RLS policies
+* Realtime subscriptions
+
+---
+
+# UI/UX REQUIREMENTS
+
+The design must:
+
+* Feel luxurious
+* Be ultra modern
+* Be highly responsive
+* Use premium gradients
+* Have smooth hover animations
+* Use elegant cards
+* Use subtle shadows
+* Have excellent spacing
+* Include loading animations
+* Use beautiful charts
+* Have modern tables
+* Use glassmorphism effects carefully
+* Feel like a premium SaaS platform
+
+---
+
+# PERFORMANCE
+
+Optimize:
+
+* Lazy loading
+* Image optimization
+* SSR/ISR
+* API caching
+* Database optimization
+* Fast page loads
+
+---
+
+# MOBILE EXPERIENCE
+
+The mobile version must be:
+
+* Extremely polished
+* Fast
+* Easy to use
+* App-like experience
+* Responsive on all devices
+
+---
+
+# EXTRA ADVANCED FEATURES
+
+Add:
+
+* AI sales insights
+* Smart recommendations
+* Best seller predictions
+* Coupon engine
+* Loyalty rewards system
+* Referral system
+* Customer points system
+* Automated promotions
+* Seasonal campaigns
+* Live chat support
+* FAQ chatbot
+* Multi-branch support
+* Staff management
+* Audit trail system
+
+---
+
+# ADMIN ANALYTICS EXAMPLE
+
+Allow admin to:
+
+* Select custom date:
+
+  * Jan 1 → March 1
+* Automatically generate:
+
+  * Total revenue
+  * Net profit
+  * Orders count
+  * Customer count
+  * Product performance
+  * Sales comparison charts
+
+---
+
+# FINAL OUTPUT REQUIREMENTS
+
+Generate:
+
+* Full production-ready codebase
+* Modern folder structure
+* Reusable components
+* Clean architecture
+* Complete Supabase integration
+* Fully responsive UI
+* Database schema
+* API routes
+* Dashboard pages
+* Authentication system
+* Realtime features
+* Documentation
+* Deployment instructions
+
+The final system must feel like a real premium enterprise food ordering platform ready for actual business deployment.

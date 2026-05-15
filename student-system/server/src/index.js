@@ -801,11 +801,23 @@ app.get("/students", authRequired, requireRole("students"), async (req, res) => 
   res.json(rows);
 });
 
-app.get("/dashboard-stats", authRequired, async (req, res) => {
-  const { role, student_id } = req.user;
+app.get("/dashboard-stats", async (req, res) => {
+  // Optional auth: check if token exists to provide role-specific stats
+  let userRole = null;
+  let studentId = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    try {
+      const token = authHeader.substring(7);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userRole = decoded.role;
+      studentId = decoded.student_id;
+    } catch(e) {} // ignore invalid tokens for public route
+  }
+
   const stats = {};
 
-  // Total students (Available to all roles)
+  // Total students (Available to all roles and public)
   const totalStudents = await get("SELECT COUNT(*) as c FROM students WHERE deleted_at IS NULL");
   stats.totalStudents = parseInt(totalStudents?.c || 0);
 
@@ -818,12 +830,12 @@ app.get("/dashboard-stats", authRequired, async (req, res) => {
   `);
   stats.departmentCounts = deptCounts.map(d => ({ ...d, total: parseInt(d.total) }));
 
-  if (role === "student") {
+  if (userRole === "student") {
     // Student Dashboard: own grades count, own subjects
     const ownGrades = await get(`
       SELECT COUNT(*) as c FROM grades g
       JOIN students s ON s.id = g.student_id AND s.deleted_at IS NULL
-      WHERE g.student_id=? AND g.deleted_at IS NULL`, [student_id]);
+      WHERE g.student_id=? AND g.deleted_at IS NULL`, [studentId]);
     stats.gradeRecords = parseInt(ownGrades?.c || 0);
     
     // Own subjects count
@@ -927,7 +939,7 @@ app.get("/dashboard-stats", authRequired, async (req, res) => {
 });
 
 // GET dashboard extra content
-app.get("/dashboard/content", authRequired, async (req, res) => {
+app.get("/dashboard/content", async (req, res) => {
   const exam = (await get("SELECT value FROM settings WHERE key='next_examination'"))?.value || "No exam scheduled.";
   const staff = (await get("SELECT value FROM settings WHERE key='ybvc_staff'"))?.value || "[]";
   res.json({ next_examination: exam, ybvc_staff: JSON.parse(staff) });

@@ -804,18 +804,16 @@ app.get("/students", authRequired, requireRole("students"), async (req, res) => 
 
 app.get("/dashboard-stats", async (req, res) => {
   // Optional auth: check if token exists to provide role-specific stats
-  let userRole = null;
-  let studentId = null;
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
     try {
       const token = authHeader.substring(7);
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      userRole = decoded.role;
-      studentId = decoded.student_id;
+      req.user = jwt.verify(token, process.env.JWT_SECRET);
     } catch(e) {} // ignore invalid tokens for public route
   }
 
+  const role = req.user?.role;
+  const student_id = req.user?.student_id;
   const stats = {};
 
   // Total students (Available to all roles and public)
@@ -831,12 +829,12 @@ app.get("/dashboard-stats", async (req, res) => {
   `);
   stats.departmentCounts = deptCounts.map(d => ({ ...d, total: parseInt(d.total) }));
 
-  if (userRole === "student") {
+  if (role === "student") {
     // Student Dashboard: own grades count, own subjects
     const ownGrades = await get(`
       SELECT COUNT(*) as c FROM grades g
       JOIN students s ON s.id = g.student_id AND s.deleted_at IS NULL
-      WHERE g.student_id=? AND g.deleted_at IS NULL`, [studentId]);
+      WHERE g.student_id=? AND g.deleted_at IS NULL`, [student_id]);
     stats.gradeRecords = parseInt(ownGrades?.c || 0);
     
     // Own subjects count

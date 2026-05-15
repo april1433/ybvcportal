@@ -12,6 +12,7 @@ import morgan from "morgan";
 import fs from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import db, { tx, logAction, initDB, run, get, all, lastInsertId } from "./db.js";
 import {
   authRequired,

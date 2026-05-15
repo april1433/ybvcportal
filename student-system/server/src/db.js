@@ -3,14 +3,16 @@ import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// Load .env from server directory regardless of CWD
+// Try multiple .env paths for local dev (Railway injects vars directly into process.env)
 config({ path: resolve(__dirname, "../../.env") });
-config({ path: resolve(__dirname, "../.env") }); // fallback: server/.env
+config({ path: resolve(__dirname, "../.env") });
+config({ path: resolve(process.cwd(), ".env") });
 import pg from "pg";
 const { Pool } = pg;
 
 let connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
+  console.error("[DB] Available env keys:", Object.keys(process.env).filter(k => !k.includes("npm_")).join(", "));
   throw new Error("DATABASE_URL is not set in the environment!");
 }
 

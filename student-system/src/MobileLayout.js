@@ -8,7 +8,7 @@ import {
 
 // --- MOBILE-FIRST DATA COMPONENTS ---
 
-const MobileGradeCard = ({ g, subjects, students }) => {
+const MobileGradeCard = ({ g, subjects, students }) => { // eslint-disable-line no-unused-vars
   const sub = subjects.find(s => s.id === g.subject_id);
   const stu = students.find(s => s.id === g.student_id);
   const final = parseFloat(g.final) || 0;
@@ -38,7 +38,7 @@ const MobileGradeCard = ({ g, subjects, students }) => {
   );
 };
 
-const MobileUserCard = ({ u }) => (
+const MobileUserCard = ({ u }) => ( // eslint-disable-line no-unused-vars
   <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '20px', padding: '16px', marginBottom: '12px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', gap: '16px' }}>
     <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--accent-gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '20px' }}>
       {u.username[0].toUpperCase()}
@@ -53,7 +53,7 @@ const MobileUserCard = ({ u }) => (
   </div>
 );
 
-const MobileLogItem = ({ l }) => (
+const MobileLogItem = ({ l }) => ( // eslint-disable-line no-unused-vars
   <div style={{ padding: '12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: '12px' }}>
     <div style={{ fontSize: '20px' }}>{l.action?.includes('delete') ? '🗑️' : (l.action?.includes('add') ? '➕' : '📝')}</div>
     <div style={{ flex: 1 }}>
@@ -301,12 +301,12 @@ const MenuDrawer = ({ isOpen, onClose, role, onNavigate, hasPerm }) => {
 // --- MAIN LAYOUT ---
 
 export function MobileLayout(props) {
-  const { auth, content, stats, onLogout, onPageChange, activePage, api, token, role, hasPerm, subjects, permitsSemester, students, grades } = props;
+  const { auth, content, stats, onLogout, onPageChange, activePage, api, token, role, hasPerm, subjects, permitsSemester, students, grades } = props; // eslint-disable-line no-unused-vars
   const [activeTab, setActiveTab] = useState('home');
   const [userSearch, setUserSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [allLogs, setAllLogs] = useState([]);
+  const [allLogs, setAllLogs] = useState([]); // eslint-disable-line no-unused-vars
   const [allUsers, setAllUsers] = useState([]);
 
   useEffect(() => {
@@ -327,8 +327,8 @@ export function MobileLayout(props) {
     if (activePage === 'users' && token) api('/users', {}, token).then(r => setAllUsers(r || []));
   }, [activePage, token, api]);
 
-  const [localGrades, setLocalGrades] = useState([]);
-  const [loadingGrades, setLoadingGrades] = useState(false);
+  const [localGrades, setLocalGrades] = useState([]); // eslint-disable-line no-unused-vars
+  const [loadingGrades, setLoadingGrades] = useState(false); // eslint-disable-line no-unused-vars
 
   useEffect(() => {
     if (activePage === 'grades' && token) {

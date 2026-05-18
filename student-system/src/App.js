@@ -624,12 +624,12 @@ export default function App() {
   const [isSystemLoading, setIsSystemLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("Initializing System");
   const [showAuth, setShowAuth] = useState(false);
-  const [isMobile, setIsMobile] = useState(false); // Mobile layout disabled until ready
+  const [isMobile, setIsMobile] = useState(false); // Mobile layout disabled
   const [stats, setStats] = useState(null);
   const [content, setContent] = useState({ next_examination: "No examination scheduled.", ybvc_staff: [] });
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    const handleResize = () => setIsMobile(false); // Force false to disable mobile layout
     window.addEventListener("resize", handleResize);
     
     // Load public data for use in both mobile and web
